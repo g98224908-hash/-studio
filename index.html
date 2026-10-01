@@ -47,6 +47,8 @@ a{color:var(--c)}
 #gst,.err{white-space:pre-wrap;word-break:break-word;font-size:14px;color:var(--m)}
 .err{color:var(--r)}
 #mn{font-size:13px;color:var(--m);margin:8px 0 0}
+#ms{font-size:14px;margin:10px 0 0;white-space:pre-wrap;word-break:break-word}
+#ms.ok{color:#7CF0B8}#ms.bad{color:var(--r)}#ms.wait{color:var(--m)}
 [hidden]{display:none!important}
 @media(prefers-reduced-motion:reduce){body::before{animation:none}#fw{transition:none}}
 </style>
@@ -63,6 +65,7 @@ a{color:var(--c)}
   <input id="base" dir="ltr" value="https://inference.dahl.global/v1">
   <label for="model">مدل</label>
   <div class="row" style="margin-top:0"><select id="model" dir="ltr" style="flex:1"><option>MiniMaxAI/MiniMax-M2.7</option></select><button id="rf" type="button">بروزرسانی</button></div>
+  <p id="ms" role="status" aria-live="polite"></p>
   <p id="mn"></p>
 </details>
 
@@ -122,7 +125,8 @@ CODE QUALITY (the file is machine-checked, any failure means a rewrite):
 - Starts with <!DOCTYPE html>, ends with </html>. No placeholders such as TODO or "..." (the file is deployed as-is).
 - Mobile-first, tested mentally at 360px width, viewport meta tag. dir="rtl" lang="fa" for Persian.
 - No external images, scripts or libraries (only the Google Fonts link). Use CSS/SVG/emoji for visuals. Videos: use a real <video controls> element and let the user pick a file with <input type=file> and URL.createObjectURL.
-- JavaScript: plain ES2017, one <script> at the end of <body>, straight ASCII quotes only, use const/let, every variable and function defined before use, no import/export. Every id used in JavaScript (getElementById, querySelector) must exist in the HTML. Check that null elements are never dereferenced. Interactive parts must really work.
+- JavaScript: plain ES2017, one script tag at the end of the body, straight ASCII quotes only, use const/let, every variable and function defined before use, no import/export. Every id used in JavaScript (getElementById, querySelector) must exist in the HTML. Check that null elements are never dereferenced. Interactive parts must really work.
+- Wrap every localStorage/sessionStorage use in try/catch (storage may be blocked). Never use alert(), prompt() or confirm().
 - Close every tag, brace and parenthesis. Re-read the JavaScript once for syntax errors before answering.
 - Accessible: semantic HTML, contrast, visible focus, aria-labels.
 - Do not add features nobody asked for. If unclear, choose the simplest assumption.`;
@@ -143,19 +147,48 @@ $('#key').value=L('key')||'';$('#tok').value=L('tok')||'';if(L('base'))$('#base'
 const base=()=>$('#base').value.trim().replace(/\/$/,'');
 const log=(t,bad,clr)=>{const e=$('#log');if(clr)e.textContent='';if(!t)return;const d=document.createElement('div');if(bad)d.className='e';d.textContent=t;e.appendChild(d);e.scrollTop=e.scrollHeight};
 const busy=b=>['go','fix','chg','up2'].forEach(i=>$('#'+i).disabled=b);
-['key','tok','base'].forEach(k=>$('#'+k).addEventListener('change',()=>L(k,$('#'+k).value)));
+['key','tok','base'].forEach(k=>['change','input'].forEach(ev=>$('#'+k).addEventListener(ev,()=>L(k,$('#'+k).value))));
 sel.addEventListener('change',()=>{L('model',sel.value);showNote()});
 DIRS.forEach(([v,n],i)=>{const b=document.createElement('button');b.type='button';b.textContent=n;b.setAttribute('aria-pressed',i===0);
   b.onclick=()=>{dir=v;$('#dirs').querySelectorAll('button').forEach(x=>x.setAttribute('aria-pressed',x===b))};$('#dirs').appendChild(b)});
 EX.forEach(([n,t])=>{const b=document.createElement('button');b.type='button';b.textContent=n;b.onclick=()=>{$('#q').value=t};$('#ex').appendChild(b)});
+const ms=(t,c)=>{const e=$('#ms');e.textContent=t;e.className=c||''};
+const root=()=>base().replace(/\/v1$/,'');
 async function models(){
+  const b=$('#rf');b.disabled=true;b.textContent='در حال بررسی...';ms('دارم به سرور وصل می‌شم...','wait');
+  let ok=false;
   try{
-    const j=await (await fetch(base()+'/models')).json();
+    const r=await fetch(base()+'/models');
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    const j=await r.json();
+    if(!j||!Array.isArray(j.data)||!j.data.length)throw new Error('لیست مدل خالی بود');
     sel.innerHTML='';j.data.forEach(m=>sel.add(new Option(m.id,m.id)));
     const s=L('model'),d=[...sel.options].find(o=>/MiniMax-M2\.7$/.test(o.value));
     if(s&&[...sel.options].some(o=>o.value===s))sel.value=s;else if(d)sel.value=d.value;
-  }catch(e){log('لیست مدل‌ها لود نشد؛ مدل پیش‌فرض استفاده می‌شه.',1)}
-  showNote();
+    ok=true;
+    let t='✅ اتصال برقرار شد. '+j.data.length+' مدل پیدا شد.';
+    const k=$('#key').value.trim();
+    if(!k)t+='\nکلید هنوز وارد نشده؛ فقط اتصال چک شد.';
+    else{
+      try{
+        const q=await fetch(root()+'/tokens/current',{headers:{Authorization:'Bearer '+k}});
+        if(q.ok){const v=await q.json();t+='\n✅ کلید درسته. موجودی: '+Number(v.available_tokens).toLocaleString('en-US')+' توکن.'}
+        else if(q.status===401)t+='\n❌ کلید نامعتبره؛ یه کلید جدید بساز.';
+        else t+='\n⚠️ چک کلید جواب نداد (کد '+q.status+').';
+      }catch(e){t+='\n⚠️ چک کلید ممکن نشد؛ موقع ساخت سایت معلوم می‌شه.'}
+    }
+    ms(t,'ok');
+  }catch(e){
+    let why;
+    if(e.name==='TypeError'||/Failed to fetch|NetworkError|Load failed/i.test(e.message)){
+      let net=false;
+      try{await fetch(base()+'/models',{mode:'no-cors'});net=true}catch(x){}
+      why=net?'❌ سرور در دسترسه ولی اجازه نمی‌ده مرورگر بهش وصل بشه (محدودیت CORS). راه‌حلش ساخت یه پروکسی کوچیکه؛ بهم بگو.'
+              :'❌ به سرور نمی‌رسم. اینترنت یا VPN رو چک کن، یا آدرس Base URL غلطه.';
+    }else why='❌ خطا: '+e.message;
+    ms(why,'bad');
+  }finally{b.disabled=false;b.textContent='بروزرسانی'}
+  showNote();return ok;
 }
 $('#rf').onclick=models;models();
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
@@ -164,7 +197,9 @@ async function ask(msgs,max,label){
   for(let t=0;t<6;t++){
     const body={model:sel.value,messages:msgs,stream:true,temperature:P.t,top_p:P.p,max_tokens:mx};
     if(useK)body.top_k=P.k;
-    const r=await fetch(base()+'/chat/completions',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+$('#key').value.trim()},body:JSON.stringify(body)});
+    const ac=new AbortController();let last=Date.now();const wd=setInterval(()=>{if(Date.now()-last>150000)ac.abort()},5000);
+    try{
+    const r=await fetch(base()+'/chat/completions',{method:'POST',signal:ac.signal,headers:{'Content-Type':'application/json',Authorization:'Bearer '+$('#key').value.trim()},body:JSON.stringify(body)});
     if(!r.ok){
       const x=await r.text();
       if((r.status===503||r.status===429)&&t<4){log('سرور شلوغه، دوباره تلاش می‌کنم...');await wait(2500*(t+1));continue}
@@ -177,7 +212,7 @@ async function ask(msgs,max,label){
     log(label+' شروع شد...');
     const rd=r.body.getReader(),dec=new TextDecoder();let buf='',out='',th=0,n=0;
     for(;;){
-      const {done,value}=await rd.read();if(done)break;
+      const {done,value}=await rd.read();if(done)break;last=Date.now();
       buf+=dec.decode(value,{stream:true});const ls=buf.split('\n');buf=ls.pop();
       for(const l of ls){
         if(!l.startsWith('data:'))continue;const d=l.slice(5).trim();if(d==='[DONE]')continue;
@@ -192,6 +227,8 @@ async function ask(msgs,max,label){
       }
     }
     return out;
+    }catch(e){if(e.name==='AbortError')throw new Error('سرور بیشتر از ۲ دقیقه جواب نداد؛ دوباره امتحان کن.');throw e}
+    finally{clearInterval(wd)}
   }
   throw new Error('سرور جواب نداد؛ چند دقیقه بعد دوباره امتحان کن.');
 }
@@ -207,18 +244,20 @@ function check(h){
   if(!/^<!DOCTYPE html/i.test(h))p.push('must start with <!DOCTYPE html>');
   if(!/<\/html>\s*$/i.test(h))p.push('file is incomplete: it must end with </html>');
   if(h.length<3500)p.push('design is too minimal: make it richer and more polished');
-  if(/TODO|lorem ipsum|rest of (the )?code|(\/\/|<!--|\/\*)\s*\.\.\./i.test(h))p.push('remove placeholders (TODO, lorem ipsum, "...")');
+  if(/lorem ipsum|rest of (the )?code|(\/\/|<!-{2}|\/\*)\s*(TODO|\.\.\.)/i.test(h))p.push('remove placeholders (TODO, lorem ipsum, "...")');
   if(!/viewport/i.test(h))p.push('add the viewport meta tag');
   if(!/<body[\s>]/i.test(h))p.push('add a <body> element');
   if((h.match(/<style[\s>]/gi)||[]).length!==(h.match(/<\/style>/gi)||[]).length)p.push('unclosed <style> tag');
   if((h.match(/<script[\s>]/gi)||[]).length!==(h.match(/<\/script>/gi)||[]).length)p.push('unclosed <script> tag');
   if(/(src|href)=["']https?:\/\/(?!fonts\.(googleapis|gstatic)\.com)/i.test(h)&&/src=["']https?:/i.test(h))p.push('no external images or scripts: use inline CSS/SVG only');
+  if(/url\(\s*["']?https?:/i.test(h))p.push('no remote images in CSS url(): use inline SVG or gradients');
   if(/font-family:\s*["']?(Inter|Roboto|Arial|Helvetica)\b/i.test(h))p.push('do not use Inter/Roboto/Arial/Helvetica as the main font: choose distinctive Google Fonts');
   if(/@keyframes|animation:/.test(h)&&!/prefers-reduced-motion/.test(h))p.push('add a prefers-reduced-motion rule for animations');
   /* بررسی واقعی نحو جاوااسکریپت (بدون اجرا) */
   const re=/<script([^>]*)>([\s\S]*?)<\/script>/gi;let m,js='';
   while((m=re.exec(h))){
-    if(/\bsrc\s*=/.test(m[1])||/type\s*=\s*["']?(?!text\/javascript|application\/javascript)/i.test(m[1]))continue;
+    const ty=(m[1].match(/type\s*=\s*["']?([^"'\s>]+)/i)||[])[1];
+    if(/\bsrc\s*=/.test(m[1])||(ty&&!/^(text|application)\/(x-)?(java|ecma)script$/i.test(ty)))continue;
     js+=m[2]+'\n';
     try{new Function(m[2])}catch(e){p.push('JavaScript syntax error: '+e.message)}
   }
@@ -231,7 +270,7 @@ function check(h){
   if(miss.length)p.push('JavaScript uses ids that do not exist in the HTML: '+miss.join(', '));
   return p;
 }
-const HOOK='<script>addEventListener("error",function(e){parent.postMessage({err:e.message+" (line "+e.lineno+")"},"*")});addEventListener("unhandledrejection",function(e){parent.postMessage({err:"Promise: "+(e.reason&&e.reason.message||e.reason)},"*")})<\/script>';
+const HOOK='<scr'+'ipt>addEventListener("error",function(e){parent.postMessage({err:e.message+" (line "+e.lineno+")"},"*")});addEventListener("unhandledrejection",function(e){parent.postMessage({err:"Promise: "+(e.reason&&e.reason.message||e.reason)},"*")})<\/scr'+'ipt>';
 const withHook=h=>/<head[^>]*>/i.test(h)?h.replace(/<head[^>]*>/i,m=>m+HOOK):HOOK+h;
 /* تست اجرا: سایت رو توی یه iframe نامرئی باز می‌کنه و خطاهای زمان اجرا رو جمع می‌کنه */
 function probe(h){
@@ -268,7 +307,8 @@ async function gen(text,fresh){
       }
     }
     hist.push({role:'user',content:u});
-    let msgs=[{role:'system',content:SYS},...hist.slice(-6)];
+    let hh=hist.slice(-6);while(hh.length&&hh[0].role!=='user')hh.shift();
+    let msgs=[{role:'system',content:SYS},...hh];
     for(let i=0;i<3;i++){
       log('۲) دارم کد می‌نویسم...');
       const raw=await ask(msgs,32000,'۲) کد:'),h=extract(raw);
